@@ -47,7 +47,6 @@ def load_model_and_tokenizer(model_name: str, adapter_dir: str | None = None):
     return model, tokenizer
 
 
-@torch.no_grad()
 def generate_batch(
     model,
     tokenizer,
@@ -61,21 +60,22 @@ def generate_batch(
     device = getattr(model, "device", None) or next(model.parameters()).device
     outputs: list[str] = []
 
-    for start in range(0, len(prompts), batch_size):
-        chunk = prompts[start:start + batch_size]
-        enc = tokenizer(
-            chunk, return_tensors="pt", padding=True,
-            truncation=True, max_length=max_prompt_tokens,
-        ).to(device)
-        gen = model.generate(
-            **enc,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            num_beams=1,
-            pad_token_id=tokenizer.pad_token_id,
-        )
-        new_tokens = gen[:, enc["input_ids"].shape[1]:]
-        outputs.extend(tokenizer.batch_decode(new_tokens, skip_special_tokens=True))
+    with torch.no_grad():
+        for start in range(0, len(prompts), batch_size):
+            chunk = prompts[start:start + batch_size]
+            enc = tokenizer(
+                chunk, return_tensors="pt", padding=True,
+                truncation=True, max_length=max_prompt_tokens,
+            ).to(device)
+            gen = model.generate(
+                **enc,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                num_beams=1,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            new_tokens = gen[:, enc["input_ids"].shape[1]:]
+            outputs.extend(tokenizer.batch_decode(new_tokens, skip_special_tokens=True))
 
     return outputs
 
