@@ -1,0 +1,22 @@
+{
+  "base_model": "Qwen/Qwen2.5-0.5B",
+  "adapter_dir": "results/sql_lora",
+  "n_test": 500,
+  "base": {
+    "n": 500,
+    "exact_match": 0.1,
+    "execution_match": 0.848,
+    "valid_sql_rate": 0.93
+  },
+  "finetuned": {
+    "n": 500,
+    "exact_match": 0.728,
+    "execution_match": 0.93,
+    "valid_sql_rate": 0.958
+  },
+  "delta": {
+    "exact_match": 0.628,
+    "execution_match": 0.082,
+    "valid_sql_rate": 0.028
+  }
+}

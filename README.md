@@ -8,23 +8,36 @@ test set**. The worked example is **text-to-SQL** on `b-mc2/sql-create-context`.
 
 ## Results
 
-`Qwen/Qwen2.5-0.5B`, LoRA (r=16, q/k/v/o), 4k train examples, 2 epochs,
-500-example held-out test split. Run `notebooks/train_sql.ipynb` on a Colab T4
-to reproduce (~25 min).
+`Qwen/Qwen2.5-0.5B`, LoRA (r=16, α=32, on q/k/v/o), 4,000 train examples,
+2 epochs (~4 min on a Colab T4), scored on a 500-example held-out test split.
+Reproduce with `notebooks/train_sql.ipynb`.
 
 | metric | base | fine-tuned | Δ |
 |---|---|---|---|
-| exact match (normalized) | _TBD_ | _TBD_ | _TBD_ |
-| execution match | _TBD_ | _TBD_ | _TBD_ |
-| valid SQL rate | _TBD_ | _TBD_ | _TBD_ |
-
-<!-- paste results/benchmark.json numbers here after the Colab run; sample
-     generations land in results/samples.md -->
+| exact match (normalized) | 10.0% | **72.8%** | **+62.8 pp** |
+| execution match | 84.8% | **93.0%** | +8.2 pp |
+| valid SQL rate | 93.0% | 95.8% | +2.8 pp |
 
 - **exact match** — normalized string equality with the gold query
 - **execution match** — gold and predicted SQL run against an in-memory SQLite DB
   built from the schema and return the same rows (the standard text-to-SQL metric)
 - **valid SQL rate** — fraction of predictions that parse and execute at all
+
+Full numbers in [`docs/benchmark.json`](docs/benchmark.json), side-by-side
+generations in [`docs/sample_generations.md`](docs/sample_generations.md).
+
+**What the model learned.** The base model already writes plausible SQL
+(84.8% execution match), so the large exact-match gain is mostly *conventions*:
+it learns to use the dataset's double-quoted, lower-cased string literals, stop
+over-selecting columns, and ground column names in the schema instead of
+inventing them (e.g. `championship_years__years_` → `championships__years_`).
+Execution match — which ignores those cosmetic differences — still improves
+8 points, so there is real accuracy gain on top of the formatting.
+
+**Caveats.** Execution match runs on empty tables, so it cannot separate two
+valid queries that both return nothing. `b-mc2/sql-create-context` also contains
+templated near-duplicate questions, so held-out rows can be structurally similar
+to training rows — this is single-table SQL, not Spider-level difficulty.
 
 ## When to fine-tune vs RAG
 

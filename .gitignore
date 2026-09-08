@@ -9,3 +9,4 @@ data/sql_eval.json
 data/sql_test.json
 .ipynb_checkpoints/
 .mise.toml.local
+temp/
