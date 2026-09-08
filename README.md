@@ -156,6 +156,16 @@ python inference.py --adapter_dir results/sql_lora \
 python inference.py --adapter_dir results/sql_lora --merge --out results/sql_merged
 ```
 
+## Web demo
+
+A Gradio UI (type a schema + question, get SQL) — run locally or deploy free to
+HuggingFace Spaces. See [`demo/README.md`](demo/README.md).
+
+```bash
+pip install -r demo/requirements.txt
+ADAPTER_DIR=results/sql_lora python demo/app.py   # http://127.0.0.1:7860
+```
+
 ## LLM-as-judge
 
 `benchmark.py --judge` grades a sample of predictions with an LLM
