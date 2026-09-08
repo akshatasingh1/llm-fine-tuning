@@ -1,6 +1,6 @@
 # LLM Fine-Tuning with LoRA / PEFT
 
-[![CI](https://github.com/<your-username>/llm-fine-tuning/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-username>/llm-fine-tuning/actions)
+[![CI](https://github.com/akshatasingh1/llm-fine-tuning/actions/workflows/ci.yml/badge.svg)](https://github.com/akshatasingh1/llm-fine-tuning/actions)
 
 Parameter-efficient fine-tuning (PEFT) with LoRA, end to end: dataset prep →
 training with completion-only loss → **before/after evaluation on a held-out
