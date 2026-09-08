@@ -1,6 +1,6 @@
 """
 LoRA fine-tuning wrapper using HuggingFace PEFT + Transformers.
-Handles model loading, LoRA injection, training, and adapter saving.
+Handles model loading, LoRA injection, training, adapter saving, and inference.
 """
 from __future__ import annotations
 import os
@@ -11,12 +11,73 @@ from pathlib import Path
 try:
     import torch
     from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                               TrainingArguments, Trainer, DataCollatorForLanguageModeling)
+                               TrainingArguments, Trainer, DataCollatorForSeq2Seq)
     from peft import LoraConfig, get_peft_model, TaskType, PeftModel
     from datasets import Dataset
     PEFT_AVAILABLE = True
 except ImportError:
     PEFT_AVAILABLE = False
+
+LABEL_IGNORE = -100  # HF convention: positions with this label are excluded from loss
+
+
+def _dtype_and_device_map():
+    """fp16 + device_map='auto' only make sense with a CUDA GPU."""
+    if torch.cuda.is_available():
+        return torch.float16, "auto"
+    return torch.float32, None
+
+
+def load_model_and_tokenizer(model_name: str, adapter_dir: str | None = None):
+    """Load a base causal-LM (optionally with a LoRA adapter) ready for generation."""
+    if not PEFT_AVAILABLE:
+        raise ImportError("Run: pip install transformers peft datasets torch")
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    dtype, device_map = _dtype_and_device_map()
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name, dtype=dtype, device_map=device_map
+    )
+    if adapter_dir:
+        model = PeftModel.from_pretrained(model, adapter_dir)
+    model.eval()
+    return model, tokenizer
+
+
+@torch.no_grad()
+def generate_batch(
+    model,
+    tokenizer,
+    prompts: list[str],
+    max_new_tokens: int = 128,
+    batch_size: int = 8,
+    max_prompt_tokens: int = 1024,
+) -> list[str]:
+    """Greedy-decode completions for a list of prompts. Returns only the new text."""
+    tokenizer.padding_side = "left"  # decoder-only models must left-pad for batched gen
+    device = getattr(model, "device", None) or next(model.parameters()).device
+    outputs: list[str] = []
+
+    for start in range(0, len(prompts), batch_size):
+        chunk = prompts[start:start + batch_size]
+        enc = tokenizer(
+            chunk, return_tensors="pt", padding=True,
+            truncation=True, max_length=max_prompt_tokens,
+        ).to(device)
+        gen = model.generate(
+            **enc,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            num_beams=1,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        new_tokens = gen[:, enc["input_ids"].shape[1]:]
+        outputs.extend(tokenizer.batch_decode(new_tokens, skip_special_tokens=True))
+
+    return outputs
 
 
 @dataclass
@@ -39,14 +100,15 @@ class TrainConfig:
     max_seq_length: int = 512
     warmup_ratio: float = 0.03
     lr_scheduler: str = "cosine"
-    fp16: bool = True
+    fp16: bool = True          # only applied when a CUDA GPU is available
     lora: LoRAConfig = None
 
     def __post_init__(self):
         if self.lora is None:
             self.lora = LoRAConfig()
         if self.lora.target_modules is None:
-            self.lora.target_modules = ["q_proj", "v_proj"]
+            # attention projections common to Llama/Qwen/Mistral-style models
+            self.lora.target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 
 class LoRAFinetuner:
@@ -55,18 +117,24 @@ class LoRAFinetuner:
         self.model = None
         self.tokenizer = None
 
+    @property
+    def use_fp16(self) -> bool:
+        """fp16 only makes sense on a CUDA GPU; CPU/MPS training must stay fp32."""
+        return bool(self.config.fp16 and torch.cuda.is_available())
+
     def load_model(self):
         if not PEFT_AVAILABLE:
             raise ImportError("Run: pip install transformers peft datasets torch")
 
         print(f"Loading {self.config.model_name}...")
         self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.config.model_name,
-            torch_dtype=torch.float16 if self.config.fp16 else torch.float32,
-            device_map="auto",
+            dtype=torch.float16 if self.use_fp16 else torch.float32,
+            device_map="auto" if torch.cuda.is_available() else None,
         )
 
         lora_cfg = LoraConfig(
@@ -83,21 +151,43 @@ class LoRAFinetuner:
         print(f"Trainable params: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
         return self
 
-    def _tokenize(self, examples: list[dict]) -> Dataset:
-        def fmt(ex):
-            text = f"### Instruction:\n{ex['instruction']}\n"
-            if ex.get("input"):
-                text += f"### Input:\n{ex['input']}\n"
-            text += f"### Response:\n{ex['output']}"
-            return text
+    @staticmethod
+    def _to_prompt_completion(ex: dict) -> tuple[str, str]:
+        """Accept either {'prompt','completion'} or Alpaca {'instruction','input','output'}."""
+        if "prompt" in ex and "completion" in ex:
+            return ex["prompt"], ex["completion"]
+        prompt = f"### Instruction:\n{ex['instruction']}\n"
+        if ex.get("input"):
+            prompt += f"### Input:\n{ex['input']}\n"
+        prompt += "### Response:\n"
+        return prompt, ex["output"]
 
-        texts = [fmt(ex) for ex in examples]
-        tokenized = self.tokenizer(
-            texts, max_length=self.config.max_seq_length,
-            truncation=True, padding="max_length", return_tensors="pt"
-        )
-        tokenized["labels"] = tokenized["input_ids"].clone()
-        return Dataset.from_dict({k: v.tolist() for k, v in tokenized.items()})
+    def _tokenize(self, examples: list[dict]) -> Dataset:
+        """
+        Tokenize with completion-only loss: prompt tokens get label -100 so the
+        model is trained only to produce the answer, not to echo the instruction.
+        Rows are variable-length here; DataCollatorForSeq2Seq pads each batch
+        (labels padded with -100).
+        """
+        max_len = self.config.max_seq_length
+        eos_id = self.tokenizer.eos_token_id
+        rows = {"input_ids": [], "attention_mask": [], "labels": []}
+
+        for ex in examples:
+            prompt, completion = self._to_prompt_completion(ex)
+            prompt_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+            completion_ids = self.tokenizer(completion, add_special_tokens=False)["input_ids"]
+            if eos_id is not None:
+                completion_ids = completion_ids + [eos_id]
+
+            input_ids = (prompt_ids + completion_ids)[:max_len]
+            labels = ([LABEL_IGNORE] * len(prompt_ids) + completion_ids)[:max_len]
+
+            rows["input_ids"].append(input_ids)
+            rows["attention_mask"].append([1] * len(input_ids))
+            rows["labels"].append(labels)
+
+        return Dataset.from_dict(rows)
 
     def train(self, train_examples: list[dict], eval_examples: list[dict] = None):
         if self.model is None:
@@ -106,16 +196,25 @@ class LoRAFinetuner:
         train_dataset = self._tokenize(train_examples)
         eval_dataset = self._tokenize(eval_examples) if eval_examples else None
 
+        # transformers 5.x dropped warmup_ratio; derive warmup_steps from the schedule.
+        steps_per_epoch = max(
+            1,
+            len(train_dataset)
+            // (self.config.batch_size * self.config.gradient_accumulation_steps),
+        )
+        total_steps = steps_per_epoch * self.config.num_epochs
+        warmup_steps = int(self.config.warmup_ratio * total_steps)
+
         args = TrainingArguments(
             output_dir=self.config.output_dir,
             num_train_epochs=self.config.num_epochs,
             per_device_train_batch_size=self.config.batch_size,
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             learning_rate=self.config.learning_rate,
-            fp16=self.config.fp16,
-            warmup_ratio=self.config.warmup_ratio,
+            fp16=self.use_fp16,
+            warmup_steps=warmup_steps,
             lr_scheduler_type=self.config.lr_scheduler,
-            evaluation_strategy="epoch" if eval_dataset else "no",
+            eval_strategy="epoch" if eval_dataset else "no",
             save_strategy="epoch",
             logging_steps=10,
             report_to="none",
@@ -126,7 +225,10 @@ class LoRAFinetuner:
             args=args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            data_collator=DataCollatorForLanguageModeling(self.tokenizer, mlm=False),
+            processing_class=self.tokenizer,
+            data_collator=DataCollatorForSeq2Seq(
+                self.tokenizer, padding="longest", label_pad_token_id=LABEL_IGNORE,
+            ),
         )
 
         print("Starting training...")

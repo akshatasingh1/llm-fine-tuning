@@ -10,4 +10,5 @@ jobs:
           python-version: '3.11'
       - run: pip install rouge-score numpy pytest
       - run: python -c "from data.dataset_builder import generate_synthetic_dataset, quality_filter; ex=quality_filter(generate_synthetic_dataset(50)); assert len(ex)>0; print('dataset OK')"
-      - run: python finetune.py --dry_run --n_examples 20
+      - run: python -c "from evaluation.sql_metrics import evaluate_sql; r=evaluate_sql(['SELECT COUNT(*) FROM head WHERE age > 56'], ['SELECT COUNT(*) FROM head WHERE age > 56'], ['CREATE TABLE head (age INTEGER)']); assert r['exact_match']==1.0 and r['execution_match']==1.0; print('sql_metrics OK')"
+      - run: python finetune.py --task synthetic --dry_run --n_examples 20
