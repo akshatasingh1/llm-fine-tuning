@@ -1,0 +1,13 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install rouge-score numpy pytest
+      - run: python -c "from data.dataset_builder import generate_synthetic_dataset, quality_filter; ex=quality_filter(generate_synthetic_dataset(50)); assert len(ex)>0; print('dataset OK')"
+      - run: python finetune.py --dry_run --n_examples 20
