@@ -1,7 +1,7 @@
 """
 One-off: push the trained LoRA adapter to the HF Hub so the Space can load it.
 
-    huggingface-cli login          # paste a WRITE token from hf.co/settings/tokens
+    hf auth login                  # paste a WRITE token from hf.co/settings/tokens
     python demo/upload_adapter.py --adapter_dir results/sql_lora --repo <HF_USERNAME>/qwen2.5-0.5b-sql-lora
 """
 import argparse
@@ -17,7 +17,11 @@ def main():
 
     api = HfApi()
     api.create_repo(args.repo, repo_type="model", exist_ok=True)
-    api.upload_folder(folder_path=args.adapter_dir, repo_id=args.repo, repo_type="model")
+    api.upload_folder(
+        folder_path=args.adapter_dir, repo_id=args.repo, repo_type="model",
+        allow_patterns=["adapter_*", "*.json", "*.jinja", "tokenizer*", "*.txt", "*.md"],
+        ignore_patterns=["checkpoint-*/*", "*optimizer*", "*.pt", "*.pth", "*.bin"],
+    )
     print(f"Uploaded {args.adapter_dir} -> https://huggingface.co/{args.repo}")
 
 

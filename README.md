@@ -1,10 +1,15 @@
 # LLM Fine-Tuning with LoRA / PEFT
 
 [![CI](https://github.com/akshatasingh1/llm-fine-tuning/actions/workflows/ci.yml/badge.svg)](https://github.com/akshatasingh1/llm-fine-tuning/actions)
+[![Demo](https://img.shields.io/badge/demo-🤗%20Spaces-yellow)](https://huggingface.co/spaces/akshatasingh/text-to-sql)
+[![Model](https://img.shields.io/badge/model-🤗%20Hub-blue)](https://huggingface.co/akshatasingh/qwen2.5-0.5b-sql)
 
 Parameter-efficient fine-tuning (PEFT) with LoRA, end to end: dataset prep →
 training with completion-only loss → **before/after evaluation on a held-out
 test set**. The worked example is **text-to-SQL** on `b-mc2/sql-create-context`.
+
+**Live demo:** <https://huggingface.co/spaces/akshatasingh/text-to-sql> ·
+**Model:** <https://huggingface.co/akshatasingh/qwen2.5-0.5b-sql>
 
 ## Results
 
@@ -80,11 +85,12 @@ llm-fine-tuning/
 │   └── lora_trainer.py          # LoRA/QLoRA config, Trainer wrapper, generation helpers
 ├── evaluation/
 │   ├── sql_metrics.py           # exact / execution / valid-SQL scoring
-│   ├── llm_judge.py             # Claude-as-judge: correct / partial / wrong
+│   ├── llm_judge.py             # Gemini-as-judge: correct / partial / wrong
 │   └── eval_suite.py            # generic perplexity / ROUGE-L / EM
 ├── finetune.py                  # training entry point  (--task sql | synthetic)
 ├── benchmark.py                 # base vs fine-tuned on the held-out test set
 ├── inference.py                 # run the model on a question, or merge adapter -> base
+├── demo/                        # Gradio web UI + HF Spaces deploy notes
 ├── tests/                       # pytest: metrics, judge parser, dataset, config
 ├── notebooks/train_sql.ipynb    # Colab runner (T4 GPU)
 ├── WRITEUP.md                   # the engineering narrative
@@ -158,22 +164,31 @@ python inference.py --adapter_dir results/sql_lora --merge --out results/sql_mer
 
 ## Web demo
 
-A Gradio UI (type a schema + question, get SQL) — run locally or deploy free to
-HuggingFace Spaces. See [`demo/README.md`](demo/README.md).
+Live: <https://huggingface.co/spaces/akshatasingh/text-to-sql> (free ZeroGPU).
+
+A Gradio UI (type a schema + question, get SQL). The app loads the **merged**
+model so nothing touches CUDA at startup. Run locally:
 
 ```bash
 pip install -r demo/requirements.txt
-ADAPTER_DIR=results/sql_lora python demo/app.py   # http://127.0.0.1:7860
+# against the Hub model:
+MODEL_ID=akshatasingh/qwen2.5-0.5b-sql python demo/app.py   # http://127.0.0.1:7860
+# or a local merged dir: python inference.py --adapter_dir results/sql_lora --merge --out /tmp/m
+#                        MODEL_ID=/tmp/m python demo/app.py
 ```
+
+Deploy notes: [`demo/README.md`](demo/README.md).
 
 ## LLM-as-judge
 
 `benchmark.py --judge` grades a sample of predictions with an LLM
 (correct / partial / wrong), which credits queries that are right but written
-differently from the gold. Uses Gemini (free tier) — get a key at
+differently from the gold. Uses Gemini — get a key at
 [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and
-`export GEMINI_API_KEY=...`. `--judge_n` sets how many examples are sent
-(default 100; free-tier flash is ~15 req/min so ~200 calls takes a few minutes).
+`export GEMINI_API_KEY=...` (or put it in `.env`). `--judge_n` sets how many
+examples are sent (default 100). Free-tier quotas are small and per-model — some
+flash models allow only ~20 requests/day — so keep `--judge_n` low or use a paid
+key; failed calls are reported as `errors`, not counted as wrong.
 
 ```bash
 python benchmark.py --base_model Qwen/Qwen2.5-0.5B --adapter_dir results/sql_lora \

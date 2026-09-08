@@ -1,4 +1,4 @@
+spaces
 gradio>=4.44.0
 torch>=2.2.0
 transformers>=5.0.0
-peft>=0.20.0

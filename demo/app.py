@@ -1,8 +1,11 @@
 """
-Gradio demo for the text-to-SQL LoRA fine-tune. Runs on a free HF Spaces CPU:
-loads base Qwen2.5-0.5B + the ~4 MB LoRA adapter from the Hub.
+Gradio demo for the text-to-SQL fine-tune.
 
-Set ADAPTER_REPO to your uploaded adapter repo id.
+Runs on HF Spaces free ZeroGPU (or CPU / local). Loads the *merged* fine-tuned
+model (adapter baked into the base weights) so there is no PEFT / CUDA work at
+startup — the GPU is only touched inside a request.
+
+Set env MODEL_ID to a local path to test without the Hub.
 """
 import os
 import re
@@ -10,11 +13,16 @@ import re
 import gradio as gr
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
 
-BASE_MODEL = "Qwen/Qwen2.5-0.5B"
-# On the Space this is the Hub repo id; locally, set ADAPTER_DIR=path/to/adapter to test.
-ADAPTER_REPO = os.environ.get("ADAPTER_DIR", "<HF_USERNAME>/qwen2.5-0.5b-sql-lora")
+try:
+    import spaces
+
+    gpu = spaces.GPU
+except ImportError:  # local / plain CPU
+    def gpu(fn=None, **_):
+        return fn if callable(fn) else (lambda f: f)
+
+MODEL_ID = os.environ.get("MODEL_ID", "akshatasingh/qwen2.5-0.5b-sql")
 
 PROMPT_TEMPLATE = (
     "### Task:\n"
@@ -25,11 +33,10 @@ PROMPT_TEMPLATE = (
     "### SQL:\n"
 )
 
-tokenizer = AutoTokenizer.from_pretrained(ADAPTER_REPO)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
-model = AutoModelForCausalLM.from_pretrained(BASE_MODEL)
-model = PeftModel.from_pretrained(model, ADAPTER_REPO)
+model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=torch.float32)
 model.eval()
 
 
@@ -44,12 +51,15 @@ def extract_sql(text: str) -> str:
     return " ".join(text.split())
 
 
+@gpu(duration=20)
 @torch.no_grad()
 def to_sql(schema: str, question: str) -> str:
     if not schema.strip() or not question.strip():
         return "-- provide both a schema and a question"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
     prompt = PROMPT_TEMPLATE.format(schema=schema.strip(), question=question.strip())
-    enc = tokenizer(prompt, return_tensors="pt")
+    enc = tokenizer(prompt, return_tensors="pt").to(device)
     out = model.generate(
         **enc, max_new_tokens=128, do_sample=False, num_beams=1,
         pad_token_id=tokenizer.pad_token_id,
@@ -66,7 +76,7 @@ demo = gr.Interface(
         gr.Textbox(label="Question", value="How many heads are older than 56?"),
     ],
     outputs=gr.Code(label="SQL", language="sql"),
-    title="Text-to-SQL — Qwen2.5-0.5B + LoRA",
+    title="Text-to-SQL — Qwen2.5-0.5B fine-tuned with LoRA",
     description="Fine-tuned on b-mc2/sql-create-context. Single-table queries.",
     examples=[
         ["CREATE TABLE head (name VARCHAR, age INTEGER)", "List the names of heads ordered by age."],

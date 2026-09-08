@@ -42,12 +42,12 @@ rows. Both caveats are stated in the README.
 - QLoRA (`--load_in_4bit`, NF4) is wired in so the same script fine-tunes a 7B
   model on the same 16 GB GPU; the headline run did not need it.
 
-Loss: train 0.19 → 0.065, eval 0.097. No sign of overfitting at 2 epochs; a
-third epoch moved eval loss <0.005.
+Loss: train ~0.19 → ~0.065 (final `train_loss` 0.085), eval 0.097. No sign of
+overfitting at 2 epochs; a third epoch was not run.
 
 ## 4. Results
 
-500-example held-out test split (LLM-judge on a 20-example subset).
+500-example held-out test split (LLM-judge on a 25-example subset).
 
 | metric | base | fine-tuned | Δ |
 |---|---|---|---|
@@ -105,9 +105,14 @@ Two of fifteen sampled queries are still wrong after fine-tuning (`a_` vs
 - Possible train/test structural overlap from templated questions.
 - 0.5B model — a 1.5–7B base (via the QLoRA path) would raise the ceiling.
 
-## 8. Next
+## 8. Shipped / next
+
+The merged model and a Gradio demo are live:
+<https://huggingface.co/spaces/akshatasingh/text-to-sql> (loads
+`akshatasingh/qwen2.5-0.5b-sql`).
+
+Next:
 
 - Run the QLoRA path on Qwen2.5-7B and compare the curve.
 - Swap in the Spider dev set for a harder, cleaner benchmark.
 - Full 500-example LLM-judge pass on a paid key; add position-swap debiasing.
-- Serve the merged model behind a small FastAPI endpoint.
