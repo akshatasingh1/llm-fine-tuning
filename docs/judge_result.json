@@ -1,0 +1,15 @@
+{
+  "judge_model": "gemini-flash-lite-latest",
+  "note": "LLM-as-judge on held-out test examples; verdict correct=1 / partial=0.5 / wrong=0. Free-tier quota limits kept the sample small; two runs shown.",
+  "run_25_examples": {
+    "n_scored": 25,
+    "base":      {"mean_score": 0.70, "counts": {"correct": 16, "partial": 3, "wrong": 6}},
+    "finetuned": {"mean_score": 0.92, "counts": {"correct": 23, "partial": 0, "wrong": 2}},
+    "delta": 0.22
+  },
+  "run_20_examples_fixed_error_handling": {
+    "base":      {"n_scored": 20, "errors": 0, "mean_score": 0.70, "counts": {"correct": 12, "partial": 4, "wrong": 4}},
+    "finetuned": {"n_scored": 18, "errors": 2, "mean_score": 0.94, "counts": {"correct": 17, "partial": 0, "wrong": 1}},
+    "delta": 0.24
+  }
+}

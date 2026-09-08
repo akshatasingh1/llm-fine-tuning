@@ -33,6 +33,9 @@ def main():
     ap.add_argument("--max_new_tokens", type=int, default=128)
     ap.add_argument("--batch_size", type=int, default=8)
     ap.add_argument("--n_samples", type=int, default=15, help="qualitative samples to dump")
+    ap.add_argument("--judge", action="store_true",
+                    help="also grade with an LLM judge (needs GEMINI_API_KEY)")
+    ap.add_argument("--judge_n", type=int, default=100, help="examples to send to the judge")
     ap.add_argument("--out_dir", default="results")
     args = ap.parse_args()
 
@@ -53,6 +56,13 @@ def main():
     ft_raw = _run_model(args.base_model, args.adapter_dir, prompts, args.max_new_tokens, args.batch_size)
     ft_scores = evaluate_sql(ft_raw, references, schemas)
 
+    # raw generations, so the judge can be re-run later without regenerating
+    (out_dir / "predictions.json").write_text(json.dumps([
+        {"question": t["question"], "schema": t["schema"], "gold": t["completion"],
+         "base": extract_sql(b), "finetuned": extract_sql(f)}
+        for t, b, f in zip(test, base_raw, ft_raw)
+    ], indent=2))
+
     report = {
         "base_model": args.base_model,
         "adapter_dir": args.adapter_dir,
@@ -62,6 +72,30 @@ def main():
         "delta": {k: round(ft_scores[k] - base_scores[k], 4)
                   for k in ("exact_match", "execution_match", "valid_sql_rate")},
     }
+
+    if args.judge:
+        from evaluation.llm_judge import judge_batch
+
+        k = min(args.judge_n, len(test))
+        print(f"\n=== LLM-as-judge on {k} examples ===")
+        jq, js, jg = ([ex[f] for ex in test[:k]] for f in ("question", "schema", "completion"))
+        base_j = judge_batch(jq, js, jg, [extract_sql(x) for x in base_raw[:k]])
+        ft_j = judge_batch(jq, js, jg, [extract_sql(x) for x in ft_raw[:k]])
+
+        def _slim(j):
+            return {"n_scored": j["n_scored"], "errors": j["errors"],
+                    "mean_score": j["mean_score"], "counts": j["counts"]}
+
+        report["judge"] = {"n": k, "base": _slim(base_j), "finetuned": _slim(ft_j)}
+        if base_j["mean_score"] is not None and ft_j["mean_score"] is not None:
+            report["judge"]["delta"] = round(ft_j["mean_score"] - base_j["mean_score"], 4)
+
+        for name, j in (("base", base_j), ("finetuned", ft_j)):
+            score = "n/a" if j["mean_score"] is None else f"{j['mean_score']:.3f}"
+            err = f"  ({j['errors']} errors)" if j["errors"] else ""
+            print(f"  {name:<10} {score}  {j['counts']}{err}")
+        if base_j["errors"] or ft_j["errors"]:
+            print("  note: errors are usually free-tier quota — reduce --judge_n or use a paid key")
 
     (out_dir / "benchmark.json").write_text(json.dumps(report, indent=2))
 

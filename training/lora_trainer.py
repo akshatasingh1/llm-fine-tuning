@@ -10,9 +10,10 @@ from pathlib import Path
 
 try:
     import torch
-    from transformers import (AutoModelForCausalLM, AutoTokenizer,
+    from transformers import (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig,
                                TrainingArguments, Trainer, DataCollatorForSeq2Seq)
-    from peft import LoraConfig, get_peft_model, TaskType, PeftModel
+    from peft import (LoraConfig, get_peft_model, prepare_model_for_kbit_training,
+                      TaskType, PeftModel)
     from datasets import Dataset
     PEFT_AVAILABLE = True
 except ImportError:
@@ -101,6 +102,7 @@ class TrainConfig:
     warmup_ratio: float = 0.03
     lr_scheduler: str = "cosine"
     fp16: bool = True          # only applied when a CUDA GPU is available
+    load_in_4bit: bool = False  # QLoRA: 4-bit base weights (needs CUDA + bitsandbytes)
     lora: LoRAConfig = None
 
     def __post_init__(self):
@@ -118,9 +120,14 @@ class LoRAFinetuner:
         self.tokenizer = None
 
     @property
+    def use_4bit(self) -> bool:
+        """QLoRA needs a CUDA GPU (bitsandbytes has no usable CPU path here)."""
+        return bool(self.config.load_in_4bit and torch.cuda.is_available())
+
+    @property
     def use_fp16(self) -> bool:
-        """fp16 only makes sense on a CUDA GPU; CPU/MPS training must stay fp32."""
-        return bool(self.config.fp16 and torch.cuda.is_available())
+        """fp16 only on a CUDA GPU, and not under QLoRA (which computes in bf16)."""
+        return bool(self.config.fp16 and torch.cuda.is_available() and not self.use_4bit)
 
     def load_model(self):
         if not PEFT_AVAILABLE:
@@ -131,11 +138,29 @@ class LoRAFinetuner:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        if self.config.load_in_4bit and not self.use_4bit:
+            print("load_in_4bit requested but no CUDA GPU — loading in full precision.")
+
+        quant_cfg = None
+        if self.use_4bit:
+            quant_cfg = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float16 if self.use_fp16 else torch.float32
+
         self.model = AutoModelForCausalLM.from_pretrained(
             self.config.model_name,
-            dtype=torch.float16 if self.use_fp16 else torch.float32,
+            dtype=dtype,
             device_map="auto" if torch.cuda.is_available() else None,
+            quantization_config=quant_cfg,
         )
+        if self.use_4bit:
+            self.model = prepare_model_for_kbit_training(self.model)
 
         lora_cfg = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
@@ -212,6 +237,7 @@ class LoRAFinetuner:
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             learning_rate=self.config.learning_rate,
             fp16=self.use_fp16,
+            bf16=self.use_4bit,
             warmup_steps=warmup_steps,
             lr_scheduler_type=self.config.lr_scheduler,
             eval_strategy="epoch" if eval_dataset else "no",

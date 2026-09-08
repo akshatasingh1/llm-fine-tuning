@@ -116,5 +116,5 @@ def quality_filter(examples: list[TrainingExample], min_output_len: int = 30) ->
             continue
         seen.add(key)
         filtered.append(ex)
-    print(f"Quality filter: {len(examples)} → {len(filtered)} examples")
+    print(f"Quality filter: {len(examples)} -> {len(filtered)} examples")
     return filtered

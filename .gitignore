@@ -10,3 +10,6 @@ data/sql_test.json
 .ipynb_checkpoints/
 .mise.toml.local
 temp/
+.env
+.env.*
+!.env.example

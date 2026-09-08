@@ -48,6 +48,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--max_seq_length", type=int, default=512)
+    parser.add_argument("--load_in_4bit", action="store_true",
+                        help="QLoRA: 4-bit base weights (needs CUDA + bitsandbytes)")
     # synthetic
     parser.add_argument("--n_examples", type=int, default=500)
     # sql
@@ -72,6 +74,7 @@ def main():
         num_epochs=args.epochs,
         batch_size=args.batch_size,
         max_seq_length=args.max_seq_length,
+        load_in_4bit=args.load_in_4bit,
     )
 
     trainer = LoRAFinetuner(config)
@@ -79,7 +82,7 @@ def main():
 
     with open("results/training_log.json", "w") as f:
         json.dump(history, f, indent=2)
-    print("\n✓ Fine-tuning complete.")
+    print("\nFine-tuning complete.")
     if args.task == "sql":
         print(f"\nNext: python benchmark.py --base_model {args.model_name} "
               f"--adapter_dir {args.output_dir} --n_test {args.n_test}")
